@@ -1,0 +1,516 @@
+<HTML>
+
+<head>
+<script src="https://code.createjs.com/1.0.0/createjs.min.js"></script>
+<script src="js/KeyMonkey.js"></script>
+<script src="js/collisionGnome.js"></script>
+<script>
+
+// ************************ GLOBAL VARIABLES *********************
+var myStage;
+var stageWidth;
+var stageHeight;
+var myFrameRate = 60;
+var stageMargin = 128; // targets can't spawn this close to stage edges
+var startScreen;
+var musicStarted = false;
+var scoreText;
+
+	
+var hero;
+var heroStartSpeedX = 10;
+var heroStartSpeedY = 10;
+var heroStartPositionX; // don't initialize for center stage - or - set a value for a specific position
+var heroStartPositionY; 
+var heroStartHP = 20;
+var heroHP;
+var heroATK;
+
+var heroExists = false;
+var heroIsFrozen = true;
+
+var enemyStartHP = 6;
+var enemyHP;
+var enemyATK = 20;
+
+var turnBelongsTo;
+
+var targetsArray = [ ];
+
+
+var numberOfTargets = 25;
+var targetMaxSpeed = 6; 
+var targetMinSpeed = 2;
+var targetMaxScale = 1.15;
+var targetMinScale = .8;
+
+var bg;
+																				// $$$$$ 
+var gameClock;	
+																		// $$$$$
+var gameOver;		
+var invDuration = 50;																		// $$$$$
+var gameOverDuration = 200;		
+var deathSoundPlayed;	
+
+var bulletsArray = [ ];
+bulletsArray[0] = new createjs.Bitmap("images/bomb.png");
+var numBullets = 0;
+var bulletClock;
+var bulletCooldown = 10;
+
+var dialogOnScreen = false;
+var battleInitiated = false;
+
+var battleSelection = 0;
+var battleOptions = [ ];
+var enemyClock;
+var turnDuration = 50;
+
+// ************  init() only runs once ****************
+function init(){	
+
+var queue = new createjs.LoadQueue();
+createjs.Sound.alternateExtensions = ["mp3"];
+queue.installPlugin(createjs.Sound);
+queue.addEventListener("complete", filesArePreloaded);
+queue.loadManifest([
+	{id:"music", src:"sounds/techno.mp3"},
+	{id:"explosion", src:"sounds/Explosion8bit.ogg", data: 5},
+	{id:"playerdies", src:"sounds/Explosion.mp3", data: 5},
+	{id:"fire", src:"sounds/laser.ogg", data: 5},
+]);
+
+			function filesArePreloaded(){
+				// add text "ready to go!  click anywhere to begin"
+				readyText = new createjs.Text("ready to go!  click anywhere to begin", "20px Arial", "#ff7700");
+				readyText.x = 50;
+				readyText.y = 100;
+				myStage.addChild(readyText);
+				myStage.update();
+
+				// add event listener to startScreen
+				startScreen.addEventListener('click', initGame)
+
+				//createjs.Sound.play("music");
+			}
+
+//var musicsound = createjs.Sound.play("music");
+//musicsound.volume = 0.5;
+//musicdsound.loop = -1;
+
+
+	console.log("hello from init()");
+	// initialize stage
+	myStage = new createjs.Stage(document.getElementById("myCanvas"));
+	stageWidth = myStage.canvas.width;
+	stageHeight = myStage.canvas.height;
+	
+	startScreen = new createjs.Bitmap("images/startScreen.png");
+	myStage.addChild(startScreen);  // show name of game, any controls or other info
+	myStage.update();
+
+	// initialize ticker	
+	createjs.Ticker.addEventListener('tick', drawNewFrame);
+	createjs.Ticker._setFPS(myFrameRate);
+
+	// initialize game
+	//initGame();																				// $$$$$
+}
+
+// ************   initGame() runs at init and reset ****************
+function initGame(){	
+	if (isNaN(parseInt(sessionStorage.heroATK))){
+		heroATK = 1
+	} else {
+		heroATK = parseInt(sessionStorage.heroATK);
+	}																	// $$$$$
+	// initialize game variables 
+	console.log("hello from initGame()");
+	if (heroStartHP === undefined){
+		heroHP = 20;
+	} else{
+		heroHP = heroStartHP;
+	}
+	enemyHP = enemyStartHP;
+	turnBelongsTo = "player";
+	if (musicStarted == false){
+		createjs.Sound.play("music", "initGame", 0, 0, -1, 0.3, 0);
+		musicStarted = true;
+	}																			// $$$$$
+	gameClock = 0;	
+	bulletClock = 0;
+	gameOver = false;																		// $$$$$
+	targetsArray = [ ];
+	hero = null;
+	bg = null;
+	// initialize stage objects
+	makeBackground("images/bgBattle.png"); 	// initialize background
+	makeTargets (1); 				// initialize targets 
+	makeHero(); 								// initialize hero
+	makeSafeZone();
+	makeScoreText();
+	collisionGnome.setDebug(true);  // (boolean) show bounding boxes for debugging or not	// $$$$$
+	deathSoundPlayed = false;
+	enemyClock = 0;
+
+}// end initGame()
+
+// *****************  	MAIN LOOP  	************************
+// drawNewFrame() This function is called 60 x per second, on every 'tick' event
+
+function drawNewFrame(evt){
+	updateScoreText();
+	checkBoundaryTargets();
+    checkBoundaryHero();
+	moveTargets();
+    moveHero();   
+    checkCollisions();  																			// $$$$$
+    checkGameOver();	
+   	handleGameOver();																		// $$$$$
+    gameClock ++;	
+	bulletClock++;	
+	enemyAttack();	 
+	myStage.update();
+			
+}// end drawNewFrame()
+
+
+// ***************** 	MAKE THINGS    *************************
+
+function makeBackground(whichBackground){ // takes a string containing the filepath i.e. "images/background.png"
+	background = new createjs.Bitmap(whichBackground);
+	myStage.addChild(background);
+}
+
+function playerAttack(){
+	enemyHP = enemyHP - heroATK;
+	if (enemyHP > 0){
+		turnBelongsTo = "enemy";
+	} else {
+		gameOver = true;
+	}
+}
+
+function enemyAttack(){
+	if (turnBelongsTo == "enemy"){
+		if (enemyClock < turnDuration){
+			enemyClock++;
+		} else {
+			heroHP -= enemyATK;
+			turnBelongsTo = "player";
+			turnDuration = 0;
+		}
+	}
+}
+
+function makeHero(){																		// $$$$$
+	hero = new createjs.Bitmap("images/RobotRightStand.png");
+	if(heroStartPositionX === undefined){ hero.x = stageWidth/3; } else { hero.x = heroStartPositionX; }
+	if(heroStartPositionY === undefined){ hero.y = stageHeight/2; } else { hero.y = heroStartPositionY; }
+	myStage.addChild(hero);
+	hero.regX = 20;
+	hero.regY = 70;
+	hero.speedX = heroStartSpeedX;
+	hero.speedY = heroStartSpeedY;
+	hero.HP = 20;
+	hero.facing = "right";
+	hero.checkBuffer = hero.regY * 2;
+	// *** Add collision detection to hero ***
+	collisionGnome.addCollider(hero, 1); // (sprite, hitBoxRatio)							// $$$$$
+	heroExists = true;
+}		
+function makeSafeZone(){
+	safeZone = new createjs.Bitmap("images/SafeZone.png");
+	safeZone.regX = 70;
+	safeZone.regX = 70;
+	safeZone.x = stageWidth/2;
+	safeZone.y = stageHeight/2;
+	collisionGnome.addCollider(safeZone, 1);
+	myStage.addChild(safeZone);
+}
+function makeScoreText(){
+	scoreText = new createjs.Text("", "40px Arial", "#FFFFFF");
+	scoreText.x = 750;
+	scoreText.y = 50;
+	scoreText.textBaseline = "alphabetic";
+	myStage.addChild(scoreText);
+}
+
+function makeTargets(howManyTargets){
+
+	for (var i =0; i<howManyTargets; i++){
+		// roll a random integer: 0, 1, or 2 and store it in the new variable 'whichTarget'
+        var whichTarget = Math.floor(Math.random()*3); 
+		targetsArray[i] = new createjs.Bitmap("images/BallDown2.png");
+        // This switch statement checks our 'whichTarget' value and assigns a different Bitmap 
+        // for each possible value... 0, 1, or 2
+        /*switch(whichTarget){
+        	case 0:
+        		targetsArray[i] = new createjs.Bitmap("images/BallDown1.png");
+        		break;
+        	case 1:
+        		targetsArray[i] = new createjs.Bitmap("images/target02.png");
+        		break;
+        	case 2:
+        		targetsArray[i] = new createjs.Bitmap("images/target03.png");
+        		break;
+        } // end switch*/
+
+        targetsArray[i].regX = 32;
+        targetsArray[i].regY = 32;
+        
+        targetsArray[i].x = Math.floor(Math.random()*(stageWidth-2*stageMargin))+stageMargin;
+        targetsArray[i].y = Math.floor(Math.random()*(stageWidth-2*stageMargin))+stageMargin;
+        //targetsArray[i].scaleX = targetsArray[i].scaleY = .5;
+    
+        targetsArray[i].speedX = rollRange(targetMinSpeed, targetMaxSpeed, true);
+        targetsArray[i].speedY = rollRange(targetMinSpeed, targetMaxSpeed, true);
+    
+    	var coinTossX1 = Math.random(); // flip a coin to see if the target starts off moving horizontally
+    	if(coinTossX1 > .5) { targetsArray[i].speedX = 0; }
+		
+		var coinTossX2 = Math.random(); // flip a coin to see if horizontal target starts off moving left or right
+    	if(coinTossX2 > .5) { targetsArray[i].speedX =  - targetsArray[i].speedX; }
+		
+		// if target is moving horizontally, they will not move vertically
+		if (targetsArray[i].speedX != 0) {targetsArray[i].speedY = 0;}
+    	var coinTossY = Math.random(); // flip a coin to see if vertical target starts off moving up or down
+     	if(coinTossY > .5) { targetsArray[i].speedY = - targetsArray[i].speedY; }
+		
+
+     	// *** Add collision code to each target ***
+		collisionGnome.addCollider(targetsArray[i], 1); // (sprite, hitBoxRatio)			// $$$$$	
+      		        
+        myStage.addChild(targetsArray[i]);  
+	} // END FOR LOOP	
+}// end makeTargets()
+
+	
+// ***************** 	MOVEMENT     ****************
+
+function moveHero(){  // formerly known as 'handleKeyboardInput'
+	if (!heroIsFrozen){
+		if(keyMonkey["w"] || keyMonkey["up"]) 	{hero.y -= hero.speedY; hero.facing = "up";}
+		else if(keyMonkey["s"] || keyMonkey["down"]) {hero.y += hero.speedY; hero.facing = "down";}
+		else if(keyMonkey["d"] || keyMonkey["right"]) {hero.x += hero.speedX; hero.facing = "right";}
+		else if(keyMonkey["a"] || keyMonkey["left"]) {hero.x -= hero.speedX; hero.facing = "left";}
+	}else{
+		if(keyMonkey["d"] || keyMonkey["right"]) {battleSelection++;}
+		else if(keyMonkey["a"] || keyMonkey["left"]) {battleSelection--;}
+	}
+	if(keyMonkey["o"]) {selectOption(battleSelection);}
+}// end moveHero()
+
+function moveTargets(){
+} // end moveTargets()
+
+// ***************** 	BOUNDARIES AND COLLISIONS    ************
+		
+function checkBoundaryTargets(){
+	for(var i = 0; i<targetsArray.length; i++){	
+
+		if(targetsArray[i].x > stageWidth-targetsArray[i].regX || targetsArray[i].x < targetsArray[i].regX) {
+			//console.log("off STAGE");
+			targetsArray[i].speedX = -targetsArray[i].speedX;
+		}// end if
+		if(targetsArray[i].y > stageHeight-targetsArray[i].regY || targetsArray[i].y < targetsArray[i].regY) {
+			//console.log("off STAGE");
+			targetsArray[i].speedY = -targetsArray[i].speedY;
+		}// end if
+	}// end for
+}// end targetBoundaryCheck()
+		
+function checkBoundaryHero(){
+	//Basically:
+	// if (out of bounds) {
+	//	  put back in bounds
+	// }
+
+	if(hero.x > stageWidth - hero.regX) {
+		hero.x = stageWidth - hero.regX;
+	}// end if
+	if(hero.x < 0 + hero.regX) {
+		hero.x = 0 + hero.regX;
+	}// end if
+	if(hero.y > stageHeight - hero.regY) {
+		hero.y = stageHeight - hero.regY;
+	}// end if
+	if(hero.y < 0 + hero.regY) {
+		hero.y = 0 + hero.regY;
+	}// end if	
+
+}// end heroBoundaryCheck()
+
+function checkCollisions() {																// $$$$$...
+	if(!gameOver){
+		for(var i = targetsArray.length-1; i>=0; i--) {
+			if(hero.collidesWith(targetsArray[i])){ 
+				handleCollision(targetsArray[i]);
+			} // end if
+			for(var i2 = 0; i2 < bulletsArray.length; i2++){
+				if (targetsArray[i].collidesWith(bulletsArray[i2])){
+					bulletsArray[i2].x = 0;
+					bulletsArray[i2].y = 0;
+					myStage.removeChild(bulletsArray[i2]);
+					//bulletsArray.splice(i2, 1);
+					handleDialog(targetsArray[i]);
+					//score++;
+				}else{
+					bulletsArray[i2].x = 0;
+					bulletsArray[i2].y = 0;
+					myStage.removeChild(bulletsArray[i2]);
+				}
+			}
+		} // end for
+		if (hero.collidesWith(safeZone)){
+			heroHP = heroStartHP;
+		}
+	}
+} // end handleCollisions()																	// ... $$$$$
+
+// ********************* GAME OVER *******************
+function updateScoreText(){	
+	if(!gameOver){
+		scoreText.text = "HP: " + heroHP +"\nATK: " + heroATK + "\nEnemyHP: " + enemyHP + "\nBattleInt: " + battleSelection + "\nTurn belongs to: \n" + turnBelongsTo;
+	}else if (heroHP <= 0){
+		scoreText.text = "Game Over!";
+	}else{
+		scoreText.text = "You Win!";
+	}	// $$$$$ ...
+	
+} // END UPDATE SCORE 			
+
+function selectOption(option){
+	if (turnBelongsTo == "player"){
+		if (option == 0){	
+			playerAttack();
+		}
+	}
+}
+
+function checkGameOver(){																	// $$$$$ ...
+	if (heroHP <= 0 && gameOver === false) { 		// game over conditions
+		gameOver = true;
+		gameClock = 0;
+		console.log('this game is over!');
+	} // end if
+} // end checkGameOver()
+
+function handleCollision(thingCollidedWith){														
+	// ASSUMES THING IS SOLID - May chnange this later on
+	
+	// If thing is hazardous:
+	/*
+	if(gameClock > invDuration){
+		heroHP--;
+		createjs.Sound.play("explosion");
+		gameClock = 0;
+		console.log('You just took damage!');
+	}
+	*/
+
+	// if (thing collided with is in X direction && hero is facing that direction) {move the opposite way}
+	if(thingCollidedWith.y > hero.y && hero.facing == "down") 	{hero.y -= hero.speedY;}
+	if(thingCollidedWith.y < hero.y && hero.facing == "up") 	{hero.y += hero.speedY;}
+	if(thingCollidedWith.x > hero.x && hero.facing == "right") 	{hero.x -= hero.speedX;}
+	if(thingCollidedWith.x < hero.x && hero.facing == "left") 	{hero.x += hero.speedX;}
+} // end checkGameOver()
+
+function handleDialog(NPC){
+	if (dialogOnScreen == false){
+		heroIsFrozen = true;
+		createjs.Sound.play("explosion");
+		console.log("hello from handleDialog");
+		dialogOnScreen = true;
+
+		// add text "ready to go!  click anywhere to begin"
+		dialog = new createjs.Text("I am an enemy. Prepare to fight, loser!", "20px Arial", "#ff7700");
+		battleInitiated = true;
+		dialog.x = 50;
+		dialog.y = 800;
+		myStage.addChild(dialog);
+	}else{
+		removeDialog();
+		if (battleInitiated){
+			battleScreen(NPC);
+		}
+	}
+}
+
+function removeDialog(){
+	dialog.x = 0;
+	dialog.y = 0;
+	myStage.removeChild(dialog);
+	dialogOnScreen = false;
+	heroIsFrozen = false;
+}
+
+function handleGameOver(){
+	if (gameOver === true){
+		if (heroHP <= 0){
+			myStage.removeChild(hero);
+			if (!deathSoundPlayed){
+				createjs.Sound.play("playerdies");
+				deathSoundPlayed = true;
+			}
+		}else{
+			myStage.removeChild(targetsArray[0]);
+		}
+		if (gameClock > gameOverDuration){	
+			if (heroHP <= 0){
+				window.location.assign("test.html");
+			} else {
+				sessionStorage.ballDefeated = 1;
+				window.location.assign("reducedcode.html");
+			}
+		}
+	}// end if
+} // end handleGameOver()
+
+// ***************** 	UTILITIES     *************************
+
+function makeBullet(){
+	if (bulletClock > bulletCooldown){
+		bulletsArray[numBullets] = new createjs.Bitmap("images/bomb.png");
+		bulletsArray[numBullets].facing = hero.facing;
+		bulletsArray[numBullets].speed = heroStartSpeedX * 2;
+		bulletsArray[numBullets].regX = 22;
+		bulletsArray[numBullets].regY = 22;
+		bulletsArray[numBullets].x = hero.x;
+		bulletsArray[numBullets].y = hero.y;
+
+		if (hero.facing == "down"){bulletsArray[numBullets].y += hero.regY;}
+		if (hero.facing == "up"){bulletsArray[numBullets].y -= hero.regY;}
+		if (hero.facing == "right"){bulletsArray[numBullets].x += hero.regX;}
+		if (hero.facing == "left"){bulletsArray[numBullets].x -= hero.regX;}
+
+		collisionGnome.addCollider(bulletsArray[numBullets], 1);
+		myStage.addChild(bulletsArray[numBullets]);
+		createjs.Sound.play("fire");
+		numBullets++;
+		bulletClock = 0;
+	}
+}
+
+function rollRange(bottomEnd, topEnd, integerIfTrue){ 
+// returns a random # between bottomEnd and topEnd. 
+// The integerIfTrue parameter takes a boolean argument. 
+	if(integerIfTrue){
+		return Math.floor(Math.random() * (topEnd - bottomEnd + 1)) + bottomEnd;
+	}else{
+		return Math.random() * (topEnd - bottomEnd + 1) + bottomEnd;
+	}// end else
+}// end rollRange()
+
+// ***************** 	END JAVASCRIPT     *************************			
+	
+</script>
+
+<title></title>
+</head>
+
+<body onload="init()">
+<canvas id="myCanvas" width="1024" height="1024">Sorry. You need an HTML5 compatible browser to see this.</canvas>
+</body>
+</HTML>
